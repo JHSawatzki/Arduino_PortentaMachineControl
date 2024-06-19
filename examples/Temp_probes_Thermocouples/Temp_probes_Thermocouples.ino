@@ -25,16 +25,16 @@ void setup() {
   }
 
   // Initialize TC temperature probes
-  MachineControl_TCTempProbe.begin();
+  MachineControl_TempProbe.beginTC();
   Serial.println("TC Temperature probes initialization done");
 }
 
 void loop() {
   //Set CH0, has internal 150 ms delay
-  MachineControl_TCTempProbe.selectChannel(0);
+  MachineControl_TempProbe.selectChannel(0, PROBE_TC_K);
   Serial.println("CHANNEL 0 SELECTED");
   //Take CH0 measurement
-  float temp_ch0 = MachineControl_TCTempProbe.readTemperature(PROBE_TC_K);
+  float temp_ch0 = MachineControl_TempProbe.readTCTemperature();
   // Check and print any faults
   if (!checkTCFault()) {
     Serial.print("TC Temperature CH0 [°C]: ");
@@ -43,10 +43,10 @@ void loop() {
   }
 
   //Set CH1, has internal 150 ms delay
-  MachineControl_TCTempProbe.selectChannel(1);
+  MachineControl_TempProbe.selectChannel(1, PROBE_TC_K);
   Serial.println("CHANNEL 1 SELECTED");
   //Take CH1 measurement
-  float temp_ch1 = MachineControl_TCTempProbe.readTemperature(PROBE_TC_K);
+  float temp_ch1 = MachineControl_TempProbe.readTCTemperature();
   // Check and print any faults
   if (!checkTCFault()) {
     Serial.print("TC Temperature CH1 [°C]: ");
@@ -55,10 +55,10 @@ void loop() {
   }
 
   //Set CH2, has internal 150 ms delay
-  MachineControl_TCTempProbe.selectChannel(2);
+  MachineControl_TempProbe.selectChannel(2, PROBE_TC_K);
   Serial.println("CHANNEL 2 SELECTED");
   //Take CH2 measurement
-  float temp_ch2 = MachineControl_TCTempProbe.readTemperature(PROBE_TC_J);
+  float temp_ch2 = MachineControl_TempProbe.readTCTemperature();
   // Check and print any faults
   if (!checkTCFault()) {
     Serial.print("TC Temperature CH2 [°C]: ");
@@ -71,7 +71,7 @@ void loop() {
 
 bool checkTCFault() {
   // Check and print any faults
-  uint8_t fault = MachineControl_TCTempProbe.getLastFault();
+  uint8_t fault = MachineControl_TempProbe.getTCLastFault();
   if (fault & TC_FAULT_OPEN) {
     Serial.println("Thermocouple is open - no connections.");
     return true;

@@ -10,7 +10,7 @@
  * Circuit:
  *  - Portenta H7
  *  - Portenta Machine Control
- *  - 3-wire RTD or 2-wire RTD
+ *  - 3-wire or 2-wire PT100 RTD
  *
  * This example code is in the public domain.
  * Copyright (c) 2024 Arduino
@@ -19,27 +19,21 @@
 
 #include <Arduino_PortentaMachineControl.h>
 
-// The value of the Rref resistor. Use 430.0 for PT100
-#define RREF      400.0
-// The 'nominal' 0-degrees-C resistance of the sensor
-// 100.0 for PT100
-#define RNOMINAL  100.0
-
 void setup() {
   Serial.begin(9600);
   while (!Serial) {
       ;
   }
 
-  MachineControl_RTDTempProbe.begin(PROBE_RTD_3W);
+  MachineControl_TempProbe.beginRTD();
   Serial.println("RTD Temperature probes initialization done");
 }
 
 void loop() {
   //Set CH0, has internal 75 ms delay
-  MachineControl_RTDTempProbe.selectChannel(0);
+  MachineControl_TempProbe.selectChannel(0, PROBE_RTD_PT100_3W);
   Serial.println("CHANNEL 0 SELECTED");
-  uint16_t rtd = MachineControl_RTDTempProbe.readRTD();
+  uint16_t rtd = MachineControl_TempProbe.readRTD();
   float ratio = rtd;
   ratio /= 32768;
 
@@ -48,15 +42,15 @@ void loop() {
     Serial.print("RTD value: "); Serial.println(rtd);
     Serial.print("Ratio = "); Serial.println(ratio, 8);
     Serial.print("Resistance = "); Serial.println(RREF * ratio, 8);
-    Serial.print("Temperature = "); Serial.println(MachineControl_RTDTempProbe.readTemperature(RNOMINAL, RREF));
+    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.calculateRTDTemperature(rtd));
   }
   Serial.println();
   delay(100);
 
   //Set CH1, has internal 75 ms delay
-  MachineControl_RTDTempProbe.selectChannel(1);
+  MachineControl_TempProbe.selectChannel(1, PROBE_RTD_PT100_3W);
   Serial.println("CHANNEL 1 SELECTED");
-  rtd = MachineControl_RTDTempProbe.readRTD();
+  rtd = MachineControl_TempProbe.readRTD();
   ratio = rtd;
   ratio /= 32768;
 
@@ -65,15 +59,15 @@ void loop() {
     Serial.print("RTD value: "); Serial.println(rtd);
     Serial.print("Ratio = "); Serial.println(ratio, 8);
     Serial.print("Resistance = "); Serial.println(RREF * ratio, 8);
-    Serial.print("Temperature = "); Serial.println(MachineControl_RTDTempProbe.readTemperature(RNOMINAL, RREF));
+    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.calculateRTDTemperature(rtd));
   }
   Serial.println();
   delay(100);
 
   //Set CH2, has internal 75 ms delay
-  MachineControl_RTDTempProbe.selectChannel(2);
+  MachineControl_TempProbe.selectChannel(2, PROBE_RTD_PT100_3W);
   Serial.println("CHANNEL 2 SELECTED");
-  rtd = MachineControl_RTDTempProbe.readRTD();
+  rtd = MachineControl_TempProbe.readRTD();
   ratio = rtd;
   ratio /= 32768;
 
@@ -82,7 +76,7 @@ void loop() {
     Serial.print("RTD value: "); Serial.println(rtd);
     Serial.print("Ratio = "); Serial.println(ratio, 8);
     Serial.print("Resistance = "); Serial.println(RREF * ratio, 8);
-    Serial.print("Temperature = "); Serial.println(MachineControl_RTDTempProbe.readTemperature(RNOMINAL, RREF));
+    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.calculateRTDTemperature(rtd));
   }
   Serial.println();
   delay(1000);
@@ -90,28 +84,29 @@ void loop() {
 
 bool checkRTDFault() {
   // Check and print any faults
-  uint8_t fault = MachineControl_RTDTempProbe.readFault();
+  uint8_t fault = MachineControl_TempProbe.readRTDFault();
   if (fault) {
     Serial.print("Fault 0x"); Serial.println(fault, HEX);
-    if (MachineControl_RTDTempProbe.getHighThresholdFault(fault)) {
+    if (fault & MAX31865_FAULT_HIGH_THRESH) {
       Serial.println("RTD High Threshold");
     }
-    if (MachineControl_RTDTempProbe.getLowThresholdFault(fault)) {
+    if (fault & MAX31865_FAULT_LOW_THRESH) {
       Serial.println("RTD Low Threshold");
     }
-    if (MachineControl_RTDTempProbe.getLowREFINFault(fault)) {
+    if (fault & MAX31865_FAULT_HIGH_REFIN) {
       Serial.println("REFIN- > 0.85 x Bias");
     }
-    if (MachineControl_RTDTempProbe.getHighREFINFault(fault)) {
+    if (fault & MAX31865_FAULT_LOW_REFIN) {
       Serial.println("REFIN- < 0.85 x Bias - FORCE- open");
     }
-    if (MachineControl_RTDTempProbe.getLowRTDINFault(fault)) {
+    if (fault & MAX31865_FAULT_LOW_RTDIN) {
       Serial.println("RTDIN- < 0.85 x Bias - FORCE- open");
     }
-    if (MachineControl_RTDTempProbe.getVoltageFault(fault)) {
+    if (fault & MAX31865_FAULT_OVER_UNDER_VOLTAGE) {
       Serial.println("Under/Over voltage");
     }
-    MachineControl_RTDTempProbe.clearFault();
+    Serial.println();
+    MachineControl_TempProbe.clearRTDFault();
     return true;
   } else {
     return false;

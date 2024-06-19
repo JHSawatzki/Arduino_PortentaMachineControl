@@ -5,14 +5,7 @@
 #include <mbed.h>
 #include <SPI.h>
 #include "pins_mc.h"
-
-#define PROBE_TC_K 0
-#define PROBE_TC_J 1
-#define PROBE_TC_T 2
-
-#define PROBE_K PROBE_TC_K
-#define PROBE_J PROBE_TC_J
-#define PROBE_T PROBE_TC_T
+#include "enums_mc.h"
 
 #define TC_FAULT_NONE      (0x00) // Disable all fault checks
 #define TC_FAULT_OPEN      (0x01) // Enable open circuit fault check
@@ -29,30 +22,25 @@ public:
 
     double readTCVoltage();
     double readTCTemperature();
-    float readReferenceTemperature();
-    float readTCReferenceTemperature();
+    double readTCReferenceTemperature();
 
-    void setColdOffset(float offset); //Deprecate in future
     void setTCColdOffset(float offset);
-    float getColdOffset(); //Deprecate in future
     float getTCColdOffset();
 
-    void setFaultChecks(uint8_t faults); //Deprecate in future
     void setTCFaultChecks(uint8_t faults);
-    uint8_t getLastFault(); //Deprecate in future
     uint8_t getTCLastFault();
 
-    void setTCType(uint8_t type);
-    uint8_t getTCType();
+    void setTCType(temperature_probe_t probeType);
+    temperature_probe_t getTCType();
 
 private:
-    float _coldOffset;
-    uint8_t _faultMask = TC_FAULT_ALL;
-    uint8_t _lastFault = TC_FAULT_NONE;
-    uint8_t _current_probe_type;
     PinName _cs;
     SPIClass* _spi;
-    SPISettings _spiSettings;
+    SPISettings _spi_settings;
+    temperature_probe_t _current_probe_type = PROBE_NC;
+    float _cold_offset;
+    uint8_t _fault_mask = TC_FAULT_ALL;
+    uint8_t _last_fault = TC_FAULT_NONE;
 
     // NIST coefficient tables
     static constexpr double Jm210_760[]    = {  0.000000000000E+00,  0.503811878150E-01, 0.304758369300E-04, -0.856810657200E-07,  0.132281952950E-09, -0.170529583370E-12,  0.209480906970E-15, -0.125383953360E-18,  0.156317256970E-22 };
@@ -121,6 +109,8 @@ private:
     };
 
     uint32_t readSensor();
+    double decodeTemperatureSensorData(uint32_t rawword);
+    double decodeReferenceSensorData(uint32_t rawword);
     double mvtoTemp(double voltage);
     double tempTomv(double temp);
     double polynomial(double value, int tableEntries, coefftable const (*table));

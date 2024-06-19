@@ -1,191 +1,248 @@
 #include "MAX31865.h"
 
-MAX31865Class::MAX31865Class(PinName cs, SPIClass& spi) : _cs(cs), _spi(&spi), _spiSettings(1000000, MSBFIRST, SPI_MODE1) {
+const float MAX31865Class::Z1;
+const float MAX31865Class::Z2;
+const float MAX31865Class::Z4;
+
+MAX31865Class::MAX31865Class(PinName cs, SPIClass& spi) : _cs(cs), _spi(&spi), _spi_settings(1000000, MSBFIRST, SPI_MODE1) {
 }
 
 bool MAX31865Class::begin() {
-    _spi->begin();
+    if(!_begun) {
+        _spi->begin();
 
-    pinMode(_cs, OUTPUT);
-    digitalWrite(_cs, HIGH);
+        pinMode(_cs, OUTPUT);
+        digitalWrite(_cs, HIGH);
 
-    // disable bias
-    writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_BIAS_MASK);
+        setRTDBias(false);
+        setRTDAutoConvert(false);
+        setRTDThresholds(0, 0xFFFF);
+        clearRTDFault();
+        _async_state = IDLE; // added for asynchronous
 
-    // disable auto convert mode
-    writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_CONV_MODE_MASK);
-
-    // clear fault
-    writeByte(MAX31856_CONFIG_REG, (readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_CLEAR_FAULT_CYCLE) | MAX31856_CONFIG_CLEAR_FAULT);
-
-    // set filter frequency
-    writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_60_50_HZ_FILTER_MASK);
+        _begun = true;
+    }
 
     return true;
 }
 
-bool MAX31865Class::begin(uint8_t probeType) { // Deprecate in future
-    begin();
-
-    setRTDType(probeType);
-
-    return true;
+void MAX31865Class::end() {
+    if(_begun) {
+        pinMode(_cs, INPUT);
+        digitalWrite(_cs, LOW);
+        _spi->end();
+        _begun = false;
+    }
 }
 
-void MAX31865Class::setRTDType(uint8_t probeType) {
+void MAX31865Class::setRTDThresholds(uint16_t lowerThreshold, uint16_t upperThreshold) {
+    writeByte(MAX31865_L_FAULT_LSB_REG, lowerThreshold & 0xFF);
+    writeByte(MAX31865_L_FAULT_MSB_REG, lowerThreshold >> 8);
+    writeByte(MAX31865_H_FAULT_LSB_REG, upperThreshold & 0xFF);
+    writeByte(MAX31865_H_FAULT_MSB_REG, upperThreshold >> 8);
+}
+
+uint16_t MAX31865Class::getRTDLowerThreshold() {
+    return readWord(MAX31865_L_FAULT_MSB_REG);
+}
+
+uint16_t MAX31865Class::getRTDUpperThreshold() {
+    return readWord(MAX31865_H_FAULT_MSB_REG);
+}
+
+void MAX31865Class::setRTDType(temperature_probe_t probeType) {
     // sets 2 or 4 wire
-    if (probeType == PROBE_RTD_3W) {
-        writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) | MAX31856_CONFIG_3_WIRE);
+    if (probeType == PROBE_RTD_PT100_3W) {
+        writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) | MAX31865_CONFIG_3WIRE);
     } else {
-        writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_WIRE_MASK);
+        writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) & ~MAX31865_CONFIG_3WIRE);
     }
     _current_probe_type = probeType;
 }
 
-uint8_t MAX31865Class::getRTDType() {
+temperature_probe_t MAX31865Class::getRTDType() {
     return _current_probe_type;
 }
 
-void MAX31865Class::clearFault(void) {
-    return clearRTDFault();
-}
-
-void MAX31865Class::clearRTDFault(void) {
-    writeByte(MAX31856_CONFIG_REG, (readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_CLEAR_FAULT_CYCLE) | MAX31856_CONFIG_CLEAR_FAULT);
-}
-
-uint8_t MAX31865Class::readFault(void) {
-    return readRTDFault();
-}
-
-uint8_t MAX31865Class::readRTDFault(void) {
-    return readByte(MAX31856_FAULT_STATUS_REG);
-}
-
-bool MAX31865Class::getHighThresholdFault(uint8_t fault) {
-    return getRTDHighThresholdFault(fault);
-}
-
-bool MAX31865Class::getRTDHighThresholdFault(uint8_t fault) {
-    if (fault & MAX31865_FAULT_HIGH_THRESH) {
-        return true;
+void MAX31865Class::setRTDAutoConvert(bool enabled) {
+    uint8_t config = readByte(MAX31865_CONFIG_REG);
+    if (enabled) {
+        config |= MAX31865_CONFIG_CONV_MODE_AUTO; // enable continuous conversion
+    } else {
+        config &= ~MAX31865_CONFIG_CONV_MODE_AUTO; // disable continuous conversion
     }
-    return false;
-}
-
-bool MAX31865Class::getLowThresholdFault(uint8_t fault) {
-    return getRTDLowThresholdFault(fault);
-}
-
-bool MAX31865Class::getRTDLowThresholdFault(uint8_t fault) {
-    if (fault & MAX31865_FAULT_LOW_THRESH) {
-        return true;
+    writeByte(MAX31865_CONFIG_REG, config);
+    if (enabled && !_continuous_mode_enabled) {
+        if (_50hz_filter_enabled) {
+            delay(70);
+        } else {
+            delay(60);
+        }
     }
-    return false;
+    _continuous_mode_enabled = enabled;
 }
 
-bool MAX31865Class::getLowREFINFault(uint8_t fault) {
-    return getRTDLowREFINFault(fault);
-}
-
-bool MAX31865Class::getRTDLowREFINFault(uint8_t fault) {
-    if (fault & MAX31865_FAULT_LOW_REFIN) {
-        return true;
+void MAX31865Class::setRTD50HzFilter(bool enabled) {
+    uint8_t config = readByte(MAX31865_CONFIG_REG);
+    if (enabled) {
+        config |= MAX31865_CONFIG_FILTER_50HZ;
+    } else {
+        config &= ~MAX31865_CONFIG_FILTER_50HZ;
     }
-    return false;
+    writeByte(MAX31865_CONFIG_REG, config);
+    _50hz_filter_enabled = enabled;
 }
 
-bool MAX31865Class::getHighREFINFault(uint8_t fault) {
-    return getRTDHighREFINFault(fault);
-}
-
-bool MAX31865Class::getRTDHighREFINFault(uint8_t fault) {
-    if (fault & MAX31865_FAULT_HIGH_REFIN) {
-        return true;
+void MAX31865Class::setRTDBias(bool enabled) {
+    uint8_t config = readByte(MAX31865_CONFIG_REG);
+    if (enabled) {
+        config |= MAX31865_CONFIG_BIAS; // enable bias
+    } else {
+        config &= ~MAX31865_CONFIG_BIAS; // disable bias
     }
-    return false;
+    writeByte(MAX31865_CONFIG_REG, config);
+    _bias_voltage_enabled = enabled;
 }
 
-bool MAX31865Class::getLowRTDINFault(uint8_t fault) {
-    return getRTDLowRTDINFault(fault);
+void MAX31865Class::clearRTDFault() {
+    writeByte(MAX31865_CONFIG_REG, (readByte(MAX31865_CONFIG_REG) & ~0x2C) | MAX31865_CONFIG_FAULT_STAT);
 }
 
-bool MAX31865Class::getRTDLowRTDINFault(uint8_t fault) {
-    if (fault & MAX31865_FAULT_LOW_RTDIN) {
-        return true;
+uint8_t MAX31865Class::readRTDFault(max31865_fault_cycle_t faultCycle) {
+    if (faultCycle) {
+        uint8_t cfgRegVal = readByte(MAX31865_CONFIG_REG);
+        cfgRegVal &= 0x11; // mask out wire and filter bits
+        switch (faultCycle) {
+            case MAX31865_FAULT_AUTO:
+                writeByte(MAX31865_CONFIG_REG, (cfgRegVal | 0b10000100));
+                delay(1);
+                break;
+            case MAX31865_FAULT_MANUAL_RUN:
+                writeByte(MAX31865_CONFIG_REG, (cfgRegVal | 0b10001000));
+                return 0;
+            case MAX31865_FAULT_MANUAL_FINISH:
+                writeByte(MAX31865_CONFIG_REG, (cfgRegVal | 0b10001100));
+                return 0;
+            case MAX31865_FAULT_NONE:
+            default:
+                break;
+        }
     }
-    return false;
+    return readByte(MAX31865_FAULT_STAT_REG);
 }
 
-bool MAX31865Class::getVoltageFault(uint8_t fault) {
-    return getRTDVoltageFault(fault);
-}
+uint16_t MAX31865Class::readRTD() {
+    clearRTDFault();
 
-bool MAX31865Class::getRTDVoltageFault(uint8_t fault) {
-    if (fault & MAX31865_FAULT_OVER_UNDER_VOLTAGE) {
-        return true;
+    if (!_continuous_mode_enabled) {
+        if (!_bias_voltage_enabled) {
+            // enable bias
+            writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) | MAX31865_CONFIG_BIAS);
+            delay(10);
+        }
+        writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) | MAX31865_CONFIG_CONV_MODE_ONE_SHOT);
+        if (_50hz_filter_enabled) {
+            delay(75);
+        } else {
+            delay(65);
+        }
     }
-    return false;
+
+    uint16_t rtdValueRaw = readWord(MAX31865_RTD_MSB_REG);
+
+    if (!_bias_voltage_enabled) {
+        // disable bias
+        writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) & ~MAX31865_CONFIG_BIAS);
+    }
+
+    // remove fault
+    rtdValueRaw >>= 1;
+
+    return rtdValueRaw;
 }
 
-float MAX31865Class::convertRTDTemperature(float RTDnominal, float refResistor) {
-    float Z1, Z2, Z3, Z4, Rt, temp;
+bool MAX31865Class::readRTDAsync(uint16_t& rtdValueRaw) {
+    bool valueAvailable = false;
 
-    Rt = readRTD();
-    Rt /= 32768;
-    Rt *= refResistor;
+    switch (_async_state) {
+        case IDLE: // Idle
+            clearRTDFault();
+            if (!_bias_voltage_enabled) {
+                // enable bias
+                writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) | MAX31865_CONFIG_BIAS);
+            }
+            _async_timer = millis();
+            _async_state = SETTLING;
+            break;
 
-    Z1 = -RTD_A;
-    Z2 = RTD_A * RTD_A - (4 * RTD_B);
-    Z3 = (4 * RTD_B) / RTDnominal;
-    Z4 = 2 * RTD_B;
+        case SETTLING: // Bias voltage enabled, waiting to settle
+            if (millis() - _async_timer >= 10) {
+                writeByte(MAX31865_CONFIG_REG, readByte(MAX31865_CONFIG_REG) | MAX31865_CONFIG_CONV_MODE_ONE_SHOT);
+                _async_timer = millis();
+                _async_state = CONVERTING;
+            }
+            break;
 
-    temp = Z2 + (Z3 * Rt);
+        case CONVERTING: // Conversion started, waiting for completion
+            if (millis() - _async_timer >= (_50hz_filter_enabled ? 75 : 65)) {
+                rtdValueRaw = readWord(MAX31865_RTD_MSB_REG);
+                rtdValueRaw >>= 1; // remove fault
+                _async_state = IDLE; // get ready for next time
+                valueAvailable = true; // signal computation is done
+                //TODO disable bias??
+            }
+            break;
+    }
+    return valueAvailable;
+}
+
+float MAX31865Class::readRTDResistance(float refResistanceValue) {
+    // read RTD raw value and calculate resistance value
+    return calculateRTDResistance(readRTD(), refResistanceValue);
+}
+
+float MAX31865Class::readRTDTemperature(float rtdNominalValue, float refResistanceValue) {
+    return calculateRTDTemperature(readRTD(), rtdNominalValue, refResistanceValue);
+}
+
+float MAX31865Class::calculateRTDResistance(uint16_t rtdValueRaw, float refResistanceValue) {
+    float rtdResistanceValue = rtdValueRaw;
+    rtdResistanceValue /= 32768;
+    rtdResistanceValue *= refResistanceValue;
+    return rtdResistanceValue;
+}
+
+float MAX31865Class::calculateRTDTemperature(float rtdResistanceValue, float rtdNominalValue) {
+    float Z3 = (4 * RTD_B) / rtdNominalValue;
+
+    float temp = Z2 + (Z3 * rtdResistanceValue);
     temp = (sqrt(temp) + Z1) / Z4;
 
     if (temp >= 0)
         return temp;
-
+    
     // ugh.
-    Rt /= RTDnominal;
-    Rt *= 100; // normalize to 100 ohm
+    rtdResistanceValue /= rtdNominalValue;
+    rtdResistanceValue *= 100; // normalize to 100 ohm
 
-    float rpoly = Rt;
+    float rpoly = rtdResistanceValue;
 
     temp = -242.02;
     temp += 2.2228 * rpoly;
-    rpoly *= Rt; // square
+    rpoly *= rtdResistanceValue; // square
     temp += 2.5859e-3 * rpoly;
-    rpoly *= Rt; // ^3
+    rpoly *= rtdResistanceValue; // ^3
     temp -= 4.8260e-6 * rpoly;
-    rpoly *= Rt; // ^4
+    rpoly *= rtdResistanceValue; // ^4
     temp -= 2.8183e-8 * rpoly;
-    rpoly *= Rt; // ^5
+    rpoly *= rtdResistanceValue; // ^5
     temp += 1.5243e-10 * rpoly;
 
     return temp;
 }
 
-uint32_t MAX31865Class::readRTD() {
-    // clear fault
-    writeByte(MAX31856_CONFIG_REG, (readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_CLEAR_FAULT_CYCLE) | MAX31856_CONFIG_CLEAR_FAULT);
-
-    // enable bias
-    writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) | MAX31856_CONFIG_BIAS_ON);
-    delay(10);
-
-    // one shot config and make readings change with readByte
-    writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) | MAX31856_CONFIG_ONE_SHOT);
-    delay(65);
-
-    //reading word
-    uint16_t read = readWord(MAX31856_RTD_MSB_REG);
-    read = read >> 1;
-
-    // disable bias
-    writeByte(MAX31856_CONFIG_REG, readByte(MAX31856_CONFIG_REG) & MAX31856_CONFIG_BIAS_MASK);
-
-    return read;
+float MAX31865Class::calculateRTDTemperature(uint16_t rtdValueRaw, float rtdNominalValue, float refResistanceValue) {
+    return calculateRTDTemperature(calculateRTDResistance(rtdValueRaw, refResistanceValue), rtdNominalValue);
 }
 
 uint8_t MAX31865Class::readByte(uint8_t addr) {
@@ -194,9 +251,9 @@ uint8_t MAX31865Class::readByte(uint8_t addr) {
 
     digitalWrite(_cs, LOW);
 
-    _spi->beginTransaction(_spiSettings);
+    _spi->beginTransaction(_spi_settings);
     _spi->transfer(addr);
-    _spi->transfer(&read,1);
+    _spi->transfer(&read, 1);
     _spi->endTransaction();
 
     digitalWrite(_cs, HIGH);
@@ -205,19 +262,22 @@ uint8_t MAX31865Class::readByte(uint8_t addr) {
 }
 
 uint16_t MAX31865Class::readWord(uint8_t addr) {
-    uint16_t read = 0x00;
+    uint8_t buffer[2] = {0, 0};
+    addr &= 0x7F; // make sure top bit is not set
 
     digitalWrite(_cs, LOW);
 
-    _spi->beginTransaction(_spiSettings);
+    _spi->beginTransaction(_spi_settings);
     _spi->transfer(addr);
-    for (int i = 0; i < 2; i++) {
-        read = read << 8;
-        read |= _spi->transfer(0);
-    }
+    buffer[0] = _spi->transfer(0x00);
+    buffer[1] = _spi->transfer(0x00);
     _spi->endTransaction();
 
     digitalWrite(_cs, HIGH);
+
+    uint16_t read = buffer[0];
+    read <<= 8;
+    read |= buffer[1];
 
     return read;
 }
@@ -228,7 +288,7 @@ void MAX31865Class::writeByte(uint8_t addr, uint8_t data) {
 
     digitalWrite(_cs, LOW);
 
-    _spi->beginTransaction(_spiSettings);
+    _spi->beginTransaction(_spi_settings);
     _spi->transfer(buffer,2);
     _spi->endTransaction();
 

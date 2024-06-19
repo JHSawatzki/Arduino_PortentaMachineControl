@@ -5,39 +5,32 @@
 #include <mbed.h>
 #include <SPI.h>
 #include "pins_mc.h"
+#include "enums_mc.h"
 
-#define MAX31856_CONFIG_REG 0x00
-#define MAX31856_RTD_MSB_REG 0x01
-#define MAX31856_FAULT_STATUS_REG 0x07
+#define MAX31865_CONFIG_REG 0x00
 
-//config bias mask
-#define MAX31856_CONFIG_BIAS_MASK 0x7F
-#define MAX31856_CONFIG_BIAS_ON 0x80
+#define MAX31865_CONFIG_BIAS 0x80
 
-//config conversion mode mask
-#define MAX31856_CONFIG_CONV_MODE_MASK 0xBF
-#define MAX31856_CONFIG_CONV_MODE_AUTO 0x40
+#define MAX31865_CONFIG_CONV_MODE_AUTO 0x40
+#define MAX31865_CONFIG_CONV_MODE_OFF 0x00
+#define MAX31865_CONFIG_CONV_MODE_ONE_SHOT 0x20
 
-//config one shot mask
-#define MAX31856_CONFIG_ONE_SHOT_MASK 0xDF
-#define MAX31856_CONFIG_ONE_SHOT 0x20
+#define MAX31865_CONFIG_3WIRE 0x10
+#define MAX31865_CONFIG_2WIRE 0x00
 
-//config wire mask
-#define MAX31856_CONFIG_WIRE_MASK 0xEF
-#define MAX31856_CONFIG_3_WIRE 0x10
+#define MAX31865_CONFIG_FAULT_STAT 0x02
 
-//config wire fault detection cycle mask
-#define MAX31856_CONFIG_FAULT_DECT_CYCLE_MASK 0xF3
-#define MAX31856_CONFIG_CLEAR_FAULT_CYCLE 0xD3
+#define MAX31865_CONFIG_FILTER_50HZ 0x01
+#define MAX31865_CONFIG_FILTER_60HZ 0x00
 
-//config fault status mask
-#define MAX31856_CONFIG_FAULT_STATUS_MASK 0xFD
-#define MAX31856_CONFIG_CLEAR_FAULT 0x02
+#define MAX31865_RTD_MSB_REG 0x01
+#define MAX31865_RTD_LSB_REG 0x02
+#define MAX31865_H_FAULT_MSB_REG 0x03
+#define MAX31865_H_FAULT_LSB_REG 0x04
+#define MAX31865_L_FAULT_MSB_REG 0x05
+#define MAX31865_L_FAULT_LSB_REG 0x06
+#define MAX31865_FAULT_STAT_REG 0x07
 
-// config 50 60 filter frequency mask
-#define MAX31856_CONFIG_60_50_HZ_FILTER_MASK 0xFE
-
-// fault mask
 #define MAX31865_FAULT_HIGH_THRESH 0x80
 #define MAX31865_FAULT_LOW_THRESH 0x40
 #define MAX31865_FAULT_LOW_REFIN 0x20
@@ -48,54 +41,72 @@
 #define RTD_A 3.9083e-3
 #define RTD_B -5.775e-7
 
-#define PROBE_RTD_2W 3
-#define PROBE_RTD_3W 4
+// The value of the Rref resistor.
+#define RREF 400.0
 
-#define TWO_WIRE PROBE_RTD_2W
-#define THREE_WIRE PROBE_RTD_3W
+// The 'nominal' 0-degrees-C resistance of the sensor
+// 100.0 for PT100
+#define RNOMINAL 100.0
+
+enum max31865_conversion_state_t : byte {IDLE, SETTLING, CONVERTING}; // for asynchronous mode
+
+typedef enum {
+    MAX31865_FAULT_NONE = 0,
+    MAX31865_FAULT_AUTO,
+    MAX31865_FAULT_MANUAL_RUN,
+    MAX31865_FAULT_MANUAL_FINISH
+} max31865_fault_cycle_t;
 
 class MAX31865Class {
 public:
     MAX31865Class(PinName cs = MC_RTD_CS_PIN, SPIClass& spi = SPI);
 
     bool begin();
-    bool begin(uint8_t probeType); //Deprecate in future
     void end();
 
-    void setRTDType(uint8_t probeType);
-    uint8_t getRTDType();
+    void setRTDThresholds(uint16_t lowerThreshold, uint16_t upperThreshold);
+    uint16_t getRTDLowerThreshold();
+    uint16_t getRTDUpperThreshold();
 
-    float convertRTDTemperature(float RTDnominal, float refResistor);
+    void setRTDType(temperature_probe_t probeType);
+    temperature_probe_t getRTDType();
 
-    uint8_t readFault(void); //Deprecate in future
-    uint8_t readRTDFault(void);
-    void clearFault(void); //Deprecate in future
-    void clearRTDFault(void);
+    void setRTDAutoConvert(bool enabled);
+    void setRTD50HzFilter(bool enabled);
+    void setRTDBias(bool enabled);
 
-    uint32_t readRTD();
+    uint8_t readRTDFault(max31865_fault_cycle_t faultCycle = MAX31865_FAULT_AUTO);
+    void clearRTDFault();
 
-    bool getHighThresholdFault(uint8_t fault); //Deprecate in future
-    bool getRTDHighThresholdFault(uint8_t fault);
-    bool getLowThresholdFault(uint8_t fault); //Deprecate in future
-    bool getRTDLowThresholdFault(uint8_t fault);
-    bool getLowREFINFault(uint8_t fault); //Deprecate in future
-    bool getRTDLowREFINFault(uint8_t fault);
-    bool getHighREFINFault(uint8_t fault); //Deprecate in future
-    bool getRTDHighREFINFault(uint8_t fault);
-    bool getLowRTDINFault(uint8_t fault); //Deprecate in future
-    bool getRTDLowRTDINFault(uint8_t fault);
-    bool getVoltageFault(uint8_t fault); //Deprecate in future
-    bool getRTDVoltageFault(uint8_t fault);
+    uint16_t readRTD();
+    bool readRTDAsync(uint16_t& rtdValueRaw);
+
+    float readRTDResistance(float refResistanceValue = RREF);
+    float readRTDTemperature(float rtdNominalValue = RNOMINAL, float refResistanceValue = RREF);
+
+    float calculateRTDResistance(uint16_t rtdValueRaw, float refResistanceValue = RREF);
+    float calculateRTDTemperature(float rtdResistanceValue, float rtdNominalValue = RNOMINAL);
+    float calculateRTDTemperature(uint16_t rtdValueRaw, float rtdNominalValue = RNOMINAL, float refResistanceValue = RREF);
 
 private:
+    PinName _cs;
+    SPIClass* _spi;
+    SPISettings _spi_settings;
+    temperature_probe_t _current_probe_type = PROBE_NC;
+    bool _begun;
+    bool _continuous_mode_enabled; // continuous conversion
+    bool _50hz_filter_enabled; // 50Hz filter
+    bool _bias_voltage_enabled; // bias voltage
+    uint32_t _async_timer; // timer for asynchronous mode, added Sylvain Boyer
+    max31865_conversion_state_t _async_state; // state for asynchronous mode
+
+    static constexpr float Z1 = -RTD_A;
+    static constexpr float Z2 = RTD_A * RTD_A - (4 * RTD_B);
+    static constexpr float Z4 = 2 * RTD_B;
+
     uint8_t readByte(uint8_t addr);
     uint16_t readWord(uint8_t addr);
     void writeByte(uint8_t addr, uint8_t data);
-
-    PinName _cs;
-    SPIClass* _spi;
-    SPISettings _spiSettings;
-    uint8_t _current_probe_type;
 };
 
 #endif
