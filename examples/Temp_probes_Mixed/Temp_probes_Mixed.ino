@@ -11,7 +11,7 @@
  * Circuit:
  *  - Portenta H7
  *  - Portenta Machine Control
- *  - RTDs 3-wire or 2-wire
+ *  - 3-wire or 2-wire PT100 RTD
  *  - TCs type K/J/T
  *
  * This example code is in the public domain.
@@ -20,12 +20,6 @@
  */
 
 #include <Arduino_PortentaMachineControl.h>
-
-// The value of the Rref resistor.
-#define RREF      400.0
-// The 'nominal' 0-degrees-C resistance of the sensor
-// 100.0 for PT100
-#define RNOMINAL  100.0
 
 void setup() {
   Serial.begin(9600);
@@ -38,12 +32,12 @@ void setup() {
   Serial.println("RTD Temperature probes initialization done");
 
   // Initialize TC temperature probes
-  MachineControl_TCTempProbe.beginTC();
+  MachineControl_TempProbe.beginTC();
   Serial.println("TC Temperature probes initialization done");
 }
 
 void loop() {
-  MachineControl_TempProbe.selectChannel(0, PROBE_RTD_3W);
+  MachineControl_TempProbe.selectChannel(0, PROBE_RTD_PT100_3W);
   Serial.println("CHANNEL 0 SELECTED");
   uint16_t rtd = MachineControl_TempProbe.readRTD();
   float ratio = rtd;
@@ -54,14 +48,14 @@ void loop() {
     Serial.print("RTD value: "); Serial.println(rtd);
     Serial.print("Ratio = "); Serial.println(ratio, 8);
     Serial.print("Resistance = "); Serial.println(RREF * ratio, 8);
-    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.convertRTDTemperature(RNOMINAL, RREF));
+    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.calculateRTDTemperature(rtd));
   }
   Serial.println();
   delay(100);
 
   //Set CH1, has internal 150 ms delay
-  MachineControl_TempProbe.selectChannel(0, PROBE_TC_T);
-  Serial.println("CHANNEL 0 SELECTED");
+  MachineControl_TempProbe.selectChannel(1, PROBE_TC_T);
+  Serial.println("CHANNEL 1 SELECTED");
   //Take CH0 measurement
   float temp_ch1 = MachineControl_TempProbe.readTCTemperature();
   // Check and print any faults
@@ -71,7 +65,7 @@ void loop() {
     Serial.println();
   }
 
-  MachineControl_TempProbe.selectChannel(2, PROBE_RTD_3W);
+  MachineControl_TempProbe.selectChannel(2, PROBE_RTD_PT100_3W);
   Serial.println("CHANNEL 2 SELECTED");
   rtd = MachineControl_TempProbe.readRTD();
   ratio = rtd;
@@ -82,7 +76,7 @@ void loop() {
     Serial.print("RTD value: "); Serial.println(rtd);
     Serial.print("Ratio = "); Serial.println(ratio, 8);
     Serial.print("Resistance = "); Serial.println(RREF * ratio, 8);
-    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.convertRTDTemperature(RNOMINAL, RREF));
+    Serial.print("Temperature = "); Serial.println(MachineControl_TempProbe.calculateRTDTemperature(rtd));
   }
   Serial.println();
   delay(1000);
@@ -93,24 +87,25 @@ bool checkRTDFault() {
   uint8_t fault = MachineControl_TempProbe.readRTDFault();
   if (fault) {
     Serial.print("Fault 0x"); Serial.println(fault, HEX);
-    if (MachineControl_TempProbe.getRTDHighThresholdFault(fault)) {
+    if (fault & MAX31865_FAULT_HIGH_THRESH) {
       Serial.println("RTD High Threshold");
     }
-    if (MachineControl_TempProbe.getRTDLowThresholdFault(fault)) {
+    if (fault & MAX31865_FAULT_LOW_THRESH) {
       Serial.println("RTD Low Threshold");
     }
-    if (MachineControl_TempProbe.getRTDLowREFINFault(fault)) {
+    if (fault & MAX31865_FAULT_HIGH_REFIN) {
       Serial.println("REFIN- > 0.85 x Bias");
     }
-    if (MachineControl_TempProbe.getRTDHighREFINFault(fault)) {
+    if (fault & MAX31865_FAULT_LOW_REFIN) {
       Serial.println("REFIN- < 0.85 x Bias - FORCE- open");
     }
-    if (MachineControl_TempProbe.getRTDLowRTDINFault(fault)) {
+    if (fault & MAX31865_FAULT_LOW_RTDIN) {
       Serial.println("RTDIN- < 0.85 x Bias - FORCE- open");
     }
-    if (MachineControl_TempProbe.getRTDVoltageFault(fault)) {
+    if (fault & MAX31865_FAULT_OVER_UNDER_VOLTAGE) {
       Serial.println("Under/Over voltage");
     }
+    Serial.println();
     MachineControl_TempProbe.clearRTDFault();
     return true;
   } else {
@@ -123,14 +118,17 @@ bool checkTCFault() {
   uint8_t fault = MachineControl_TempProbe.getTCLastFault();
   if (fault & TC_FAULT_OPEN) {
     Serial.println("Thermocouple is open - no connections.");
+    Serial.println();
     return true;
   }
   if (fault & TC_FAULT_SHORT_GND) {
     Serial.println("Thermocouple is short-circuited to GND.");
+    Serial.println();
     return true;
   }
   if (fault & TC_FAULT_SHORT_VCC) {
     Serial.println("Thermocouple is short-circuited to VCC.");
+    Serial.println();
     return true;
   }
   return false;

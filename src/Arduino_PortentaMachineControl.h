@@ -7,8 +7,6 @@
 #include "ProgrammableDIOClass.h"
 #include "ProgrammableDINClass.h"
 #include "TempProbeClass.h"
-#include "RTDTempProbeClass.h"
-#include "TCTempProbeClass.h"
 #include "RtcControllerClass.h"
 #include "USBClass.h"
 #include "EncoderClass.h"
